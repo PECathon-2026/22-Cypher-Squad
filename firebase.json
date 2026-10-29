@@ -1,0 +1,69 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": {
+    "source": "functions"
+  },
+  "hosting": {
+    "public": "dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "headers": [
+      {
+        "source": "/api/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-store, no-cache, must-revalidate, max-age=0"
+          }
+        ]
+      }
+    ],
+    "rewrites": [
+      {
+        "source": "/api/fetch",
+        "function": {
+          "functionId": "fetchUpstream",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/discovery/popular",
+        "function": {
+          "functionId": "popularFeeds",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/discovery/recommendations",
+        "function": {
+          "functionId": "recommendations",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/discovery/submit",
+        "function": {
+          "functionId": "submitContribution",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "emulators": {
+    "functions": {
+      "port": 5002
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "hosting": {
+      "port": 5000
+    }
+  }
+}
