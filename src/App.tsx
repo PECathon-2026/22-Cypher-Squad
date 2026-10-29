@@ -619,7 +619,7 @@ function PostRow({ post, onMarkViewed }: { post: Post; onMarkViewed: (id: string
           <span>{post.minutes} min read</span>
         </div>
         <button className="post-title" onClick={() => navigate(`/read?post=${encodeURIComponent(post.id)}`)}>{post.title}</button>
-        <p>{post.summary}</p>
+        {post.summary ? <p className="post-summary">{post.summary.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()}</p> : null}
         <div className="post-actions">
           <button onClick={() => navigate(`/read?post=${encodeURIComponent(post.id)}`)}>Read story <ArrowUpRight size={14} /></button>
           <button onClick={() => onMarkViewed(post.id, !post.viewed)}>
