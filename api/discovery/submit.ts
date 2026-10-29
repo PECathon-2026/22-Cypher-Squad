@@ -65,7 +65,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     }
   }
 
-  const result = recordBatchContribution(requestId, rawUrls);
+  const result = await recordBatchContribution(requestId, rawUrls);
   res.statusCode = 200;
   res.end(JSON.stringify(result));
 }

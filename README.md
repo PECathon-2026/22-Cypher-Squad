@@ -73,18 +73,29 @@ flowchart TD
 
 ## 2. Setup & Deployment Instructions
 
-### Option A: Vercel Full-Stack Deployment (100% Free, Zero Billing / Card Required)
-The app is fully configured to deploy both frontend and serverless API endpoints to Vercel on their free tier:
+### Option A: Vercel + Firestore Deployment
+The app deploys both the frontend and `/api/*` serverless endpoints to Vercel. The Vercel endpoints use Firebase Admin SDK to persist discovery aggregates in Cloud Firestore.
+
+Add these server-only environment variables to the Vercel project:
+
+```text
+FIREBASE_PROJECT_ID
+FIREBASE_CLIENT_EMAIL
+FIREBASE_PRIVATE_KEY
+RATE_LIMIT_SECRET
+```
+
+`FIREBASE_PRIVATE_KEY` must be the service-account private key and must never be exposed as a `VITE_` variable or committed to the repository.
+
 ```bash
-# 1. Install or run Vercel CLI
+# Deploy from the local repository
 npx vercel
 
-# 2. Or connect the GitHub repository directly to Vercel (https://vercel.com/new)
-# Framework Preset: Vite
-# Build Command: npm run build
-# Output Directory: dist
+# Production deployment
+npx vercel --prod
 ```
-Once deployed, Vercel hosts both the static SPA and all `/api/*` serverless routes with zero credit card setup.
+
+The Firestore collections used by the Vercel API are `feeds`, `feedPairs`, and `contributionReceipts`. The API uses transactions and request receipts so repeated contribution requests do not double-count.
 
 ### Option B: Local Firebase Emulator Suite (100% Free for Local Testing & Evaluation)
 For local testing and presentation, the Firebase Emulator Suite runs all services locally:

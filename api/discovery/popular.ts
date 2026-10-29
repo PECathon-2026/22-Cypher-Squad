@@ -33,7 +33,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   // Popular endpoint does not accept subscription list and does not increment counters
-  const feeds = getPopularFeedsList();
+  const feeds = await getPopularFeedsList();
   res.statusCode = 200;
   res.end(JSON.stringify({ feeds }));
 }

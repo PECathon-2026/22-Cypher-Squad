@@ -54,7 +54,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   // Recommendations query combines co-subscription and popularity, excluding followed feeds
-  const feeds = getRecommendationsList(rawUrls);
+  const feeds = await getRecommendationsList(rawUrls);
   res.statusCode = 200;
   res.end(JSON.stringify({ feeds }));
 }
