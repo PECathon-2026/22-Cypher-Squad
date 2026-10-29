@@ -30,7 +30,7 @@ import {
 import { cacheArticle, extractArticle, getCachedArticle } from "./lib/article";
 import { resolveFeedUrl } from "./lib/feed";
 import { clearReaderCache, readerDb, seedDatabase, setDiscoveryEnabled, trimPostCache, type LocalPost } from "./lib/db";
-import { flushContributionOutbox, getPopularFeeds, getRecommendations, submitContribution } from "./lib/discovery";
+import { flushContributionOutbox, getPopularFeeds, getRecommendations, submitContribution, type DiscoveryFeedItem } from "./lib/discovery";
 import { refreshFeed } from "./lib/refresh";
 
 type Post = {
@@ -385,7 +385,7 @@ function App() {
               element={<DiscoverPage feeds={feeds} offline={offline} onAddFeed={addFeed} />}
             />
             <Route path="/settings" element={<SettingsPage offline={offline} onClearCache={clearCache} />} />
-            <Route path="/read" element={<ReaderPage posts={posts} onMarkViewed={markViewed} offline={offline} />} />
+            <Route path="/read" element={<ReaderPage posts={posts} feeds={feeds} onAddFeed={addFeed} onMarkViewed={markViewed} offline={offline} />} />
           </Routes>
         </main>
       </div>
@@ -492,7 +492,10 @@ function TimelinePage({
     return posts
       .filter((post) => filter === "All feeds" || post.feed === filter)
       .filter((post) => !showUnread || !post.viewed)
-      .sort((a, b) => getPublishedTime(b) - getPublishedTime(a));
+      .sort((a, b) => {
+        if (a.viewed !== b.viewed) return a.viewed ? 1 : -1;
+        return getPublishedTime(b) - getPublishedTime(a);
+      });
   }, [filter, posts, showUnread]);
 
   const submitFeed = async (event: React.FormEvent) => {
@@ -686,8 +689,8 @@ function SubscriptionsPage({ feeds, onAddFeed, onRemoveFeed }: { feeds: Feed[]; 
 function DiscoverPage({ feeds, offline, onAddFeed }: { feeds: Feed[]; offline: boolean; onAddFeed: (url: string) => Promise<string | null> }) {
   const [personalized, setPersonalized] = useState(false);
   const [sharingLoaded, setSharingLoaded] = useState(false);
-  const [liveRecommendations, setLiveRecommendations] = useState<Array<{ url: string; score?: number; reason?: string }>>([]);
-  const [livePopular, setLivePopular] = useState<Array<{ url: string; score?: number; reason?: string }>>([]);
+  const [liveRecommendations, setLiveRecommendations] = useState<DiscoveryFeedItem[]>([]);
+  const [livePopular, setLivePopular] = useState<DiscoveryFeedItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [showContribution, setShowContribution] = useState(false);
   const [contributionState, setContributionState] = useState("");
@@ -729,7 +732,7 @@ function DiscoverPage({ feeds, offline, onAddFeed }: { feeds: Feed[]; offline: b
           {(personalized ? liveRecommendations : livePopular).filter((item) => !followedUrls.has(item.url)).map((item) => (
             <article className="recommendation-card" key={item.url}>
               <div className="recommendation-swatch sage" />
-              <div className="recommendation-body"><div className="recommendation-meta"><span>{item.score ? `${item.score} aggregate signal${item.score === 1 ? "" : "s"}` : "Suggested feed"}</span><span>{personalized ? "live ranking" : "aggregate data"}</span></div><h3>{item.url}</h3><p>{item.reason ?? "A feed surfaced from anonymous aggregate signals."}</p><button className="secondary-button" onClick={() => void onAddFeed(item.url)}><Plus size={15} /> Follow feed</button></div>
+              <div className="recommendation-body"><div className="recommendation-meta"><span>{item.score ? `${item.score} aggregate signal${item.score === 1 ? "" : "s"}` : "Suggested feed"}</span><span className="flex items-center gap-1.5">{typeof item.liveSignals === "number" && item.liveSignals > 0 ? <span className="text-[#527a5d] font-semibold">{item.liveSignals} live</span> : null}{typeof item.seededSignals === "number" && item.seededSignals > 0 ? <span>{item.seededSignals} seed</span> : null}{!item.liveSignals && !item.seededSignals ? <span>{personalized ? "live ranking" : "aggregate data"}</span> : null}</span></div><h3>{item.url}</h3><p>{item.reason ?? "A feed surfaced from anonymous aggregate signals."}</p><button className="secondary-button" onClick={() => void onAddFeed(item.url)}><Plus size={15} /> Follow feed</button></div>
             </article>
           ))}
         </div>
@@ -758,12 +761,27 @@ function SettingsPage({ offline, onClearCache }: { offline: boolean; onClearCach
   );
 }
 
-function ReaderPage({ posts, onMarkViewed, offline }: { posts: Post[]; onMarkViewed: (id: string, viewed?: boolean) => void; offline: boolean }) {
+function ReaderPage({
+  posts,
+  feeds,
+  onAddFeed,
+  onMarkViewed,
+  offline,
+}: {
+  posts: Post[];
+  feeds: Feed[];
+  onAddFeed: (url: string) => Promise<string | null>;
+  onMarkViewed: (id: string, viewed?: boolean) => void;
+  offline: boolean;
+}) {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const postId = searchParams.get("post");
   const post = posts.find((item) => item.id === postId);
   const [article, setArticle] = useState<{ html: string; title: string; excerpt: string; source: string } | null>(null);
+  const [relatedBlogs, setRelatedBlogs] = useState<DiscoveryFeedItem[]>([]);
+  const [followMessage, setFollowMessage] = useState<string>("");
+
   useEffect(() => {
     if (!post) return;
     setArticle(null);
@@ -787,6 +805,28 @@ function ReaderPage({ posts, onMarkViewed, offline }: { posts: Post[]; onMarkVie
       active = false;
     };
   }, [offline, onMarkViewed, post]);
+
+  useEffect(() => {
+    if (!post || offline) return;
+    let active = true;
+    void (async () => {
+      try {
+        const state = await readerDb.sharingState.get("discovery");
+        if (!state?.enabled) return;
+        const results = await getRecommendations(feeds.map((f) => f.url), post.feedUrl);
+        if (active) {
+          const followedSet = new Set(feeds.map((f) => f.url));
+          setRelatedBlogs(results.filter((item) => !followedSet.has(item.url)).slice(0, 4));
+        }
+      } catch {
+        // Soft fallback for progressive discovery
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [post?.feedUrl, feeds, offline]);
+
   if (!post) {
     return (
       <div className="reader-page">
@@ -816,6 +856,49 @@ function ReaderPage({ posts, onMarkViewed, offline }: { posts: Post[]; onMarkVie
           </>
         )}
         <a className="original-link" href={post.articleUrl ?? post.feedUrl} target="_blank" rel="noreferrer">Open original source <ArrowUpRight size={15} /></a>
+
+        {relatedBlogs.length > 0 && (
+          <section className="discover-section mt-10 pt-7 border-t border-line">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">Discovery</span>
+                <h2 className="text-xl font-serif font-medium">Blogs like {post.feed}</h2>
+              </div>
+            </div>
+            <p className="text-muted text-xs mb-3">Discovered through anonymous co-subscription patterns with this blog.</p>
+            {followMessage && <div className="inline-message"><Check size={14} /> {followMessage}</div>}
+            <div className="recommendation-grid grid-cols-1">
+              {relatedBlogs.map((item) => (
+                <article className="recommendation-card" key={item.url}>
+                  <div className="recommendation-swatch ochre" />
+                  <div className="recommendation-body p-4">
+                    <div className="recommendation-meta">
+                      <span>{item.score ? `${item.score} signals` : "Related feed"}</span>
+                      <span className="flex items-center gap-1">
+                        {item.liveSignals ? <span className="text-[#527a5d] font-semibold">{item.liveSignals} live</span> : null}
+                        {item.seededSignals ? <span>{item.seededSignals} seed</span> : null}
+                      </span>
+                    </div>
+                    <h3 className="text-base mt-2 mb-1">{item.name || item.url}</h3>
+                    <p className="text-xs text-muted mb-3">{item.reason || `Readers of ${post.feed} also follow this blog.`}</p>
+                    <button
+                      className="secondary-button text-xs py-1.5 px-3"
+                      onClick={async () => {
+                        const err = await onAddFeed(item.url);
+                        if (!err) {
+                          setFollowMessage(`Followed ${item.name || item.url}`);
+                          setRelatedBlogs((prev) => prev.filter((b) => b.url !== item.url));
+                        }
+                      }}
+                    >
+                      <Plus size={13} /> Follow blog
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
       </article>
     </div>
   );

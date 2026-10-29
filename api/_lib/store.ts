@@ -115,8 +115,9 @@ export async function getPopularFeedsList() {
     .slice(0, 30);
 }
 
-export async function getRecommendationsList(followedUrls: string[]) {
+export async function getRecommendationsList(followedUrls: string[], contextFeed?: string) {
   const followed = new Set(followedUrls.map(normalizeSafeUrl).filter(Boolean));
+  const normalizedContext = contextFeed ? normalizeSafeUrl(contextFeed) : undefined;
   const coScores = new Map<string, number>();
   const feeds = await getPopularFeedsList();
 
@@ -128,35 +129,68 @@ export async function getRecommendationsList(followedUrls: string[]) {
         count?: number;
       });
 
+  const querySet = normalizedContext ? new Set([normalizedContext]) : followed;
+
   for (const pair of pairs) {
     const a = normalizeSafeUrl(pair.feedA);
     const b = normalizeSafeUrl(pair.feedB);
-    if (followed.has(a) && !followed.has(b) && b) {
+    if (querySet.has(a) && !followed.has(b) && b) {
       coScores.set(b, (coScores.get(b) ?? 0) + (pair.count ?? 0));
     }
-    if (followed.has(b) && !followed.has(a) && a) {
+    if (querySet.has(b) && !followed.has(a) && a) {
       coScores.set(a, (coScores.get(a) ?? 0) + (pair.count ?? 0));
     }
   }
 
-  const results: Array<{ url: string; name?: string; description?: string; score: number; reason: string }> = [];
+  const results: Array<{
+    url: string;
+    name?: string;
+    description?: string;
+    score: number;
+    reason: string;
+    liveSignals: number;
+    seededSignals: number;
+  }> = [];
 
   for (const feed of feeds) {
     if (followed.has(feed.normalizedUrl)) continue;
     const popularity = feed.livePopularityCount + feed.seededPopularityCount;
     const co = coScores.get(feed.normalizedUrl) ?? 0;
+    if (normalizedContext && co === 0) continue;
     const score = co * 3 + popularity;
-    const reason = co > 0 ? "Frequently read alongside your subscriptions" : "Aggregate popularity signal";
+    const reason = normalizedContext
+      ? `Frequently co-subscribed with this blog (${co} pair signals)`
+      : co > 0
+        ? `Frequently read alongside your subscriptions (${co} pair signals)`
+        : "Aggregate popularity signal";
     results.push({
       url: feed.normalizedUrl,
       name: feed.name,
       description: feed.description,
       score,
       reason,
+      liveSignals: feed.livePopularityCount,
+      seededSignals: feed.seededPopularityCount,
     });
   }
 
-  return results.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url)).slice(0, 10);
+  if (normalizedContext && results.length === 0) {
+    for (const feed of feeds) {
+      if (followed.has(feed.normalizedUrl)) continue;
+      results.push({
+        url: feed.normalizedUrl,
+        name: feed.name,
+        description: feed.description,
+        score: feed.livePopularityCount + feed.seededPopularityCount,
+        reason: "Suggested independent blog",
+        liveSignals: feed.livePopularityCount,
+        seededSignals: feed.seededPopularityCount,
+      });
+    }
+  }
+
+  const limit = normalizedContext ? 5 : 10;
+  return results.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url)).slice(0, limit);
 }
 
 export async function recordBatchContribution(

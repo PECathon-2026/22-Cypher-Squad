@@ -98,6 +98,21 @@ describe("Vercel Serverless API Endpoints", () => {
     expect(parsed.feeds.some((f: any) => f.url === followed)).toBe(false);
   });
 
+  it("POST /api/discovery/recommendations supports contextFeed ('Blogs like this') and returns signal breakdown", async () => {
+    const context = "https://hnrss.org/frontpage";
+    const payload = { feedUrls: ["https://feeds.bbci.co.uk/news/rss.xml"], contextFeed: context };
+    const { req, res, resState } = createMockReqRes("POST", "/api/discovery/recommendations", payload);
+    await recommendationsHandler(req, res);
+
+    expect(resState.statusCode).toBe(200);
+    const parsed = JSON.parse(resState.data);
+    expect(parsed.feeds).toBeDefined();
+    expect(parsed.feeds.length).toBeLessThanOrEqual(5);
+    expect(parsed.feeds[0]).toHaveProperty("score");
+    expect(parsed.feeds[0]).toHaveProperty("liveSignals");
+    expect(parsed.feeds[0]).toHaveProperty("seededSignals");
+  });
+
   it("POST /api/fetch blocks SSRF to private IP", async () => {
     const payload = { url: "http://127.0.0.1:80/admin" };
     const { req, res, resState } = createMockReqRes("POST", "/api/fetch", payload);

@@ -42,6 +42,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   const rawUrls = body?.feedUrls;
+  const contextFeed = body?.contextFeed ? String(body.contextFeed) : undefined;
   if (!Array.isArray(rawUrls)) {
     res.statusCode = 400;
     res.end(JSON.stringify({ error: "feedUrls array is required" }));
@@ -54,7 +55,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   // Recommendations query combines co-subscription and popularity, excluding followed feeds
-  const feeds = await getRecommendationsList(rawUrls);
+  const feeds = await getRecommendationsList(rawUrls, contextFeed);
   res.statusCode = 200;
   res.end(JSON.stringify({ feeds }));
 }

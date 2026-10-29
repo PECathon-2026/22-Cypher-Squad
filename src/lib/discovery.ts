@@ -1,6 +1,18 @@
 import { appCheckHeaders } from "./app-check";
 import { readerDb, type ContributionRecord } from "./db";
 
+export type DiscoveryFeedItem = {
+  url: string;
+  name?: string;
+  description?: string;
+  score?: number;
+  reason?: string;
+  liveSignals?: number;
+  seededSignals?: number;
+  livePopularityCount?: number;
+  seededPopularityCount?: number;
+};
+
 function safeUrls(feedUrls: string[]): string[] {
   return [...new Set(feedUrls.filter((value) => {
     try {
@@ -20,20 +32,23 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
   return fetch(path, { ...init, headers });
 }
 
-export async function getPopularFeeds() {
+export async function getPopularFeeds(): Promise<DiscoveryFeedItem[]> {
   const response = await request("/api/discovery/popular");
   if (!response.ok) throw new Error(`Popular feeds request failed with HTTP ${response.status}.`);
-  return (await response.json()).feeds as Array<{ url: string; name?: string; score?: number; reason?: string }>;
+  return (await response.json()).feeds as DiscoveryFeedItem[];
 }
 
-export async function getRecommendations(feedUrls: string[]) {
+export async function getRecommendations(feedUrls: string[], contextFeed?: string): Promise<DiscoveryFeedItem[]> {
   const response = await request("/api/discovery/recommendations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ feedUrls: safeUrls(feedUrls).slice(0, 100) }),
+    body: JSON.stringify({
+      feedUrls: safeUrls(feedUrls).slice(0, 100),
+      contextFeed: contextFeed ? safeUrls([contextFeed])[0] : undefined,
+    }),
   });
   if (!response.ok) throw new Error(`Recommendations request failed with HTTP ${response.status}.`);
-  return (await response.json()).feeds as Array<{ url: string; score?: number; reason?: string }>;
+  return (await response.json()).feeds as DiscoveryFeedItem[];
 }
 
 export async function submitContribution(feedUrls: string[]): Promise<void> {
