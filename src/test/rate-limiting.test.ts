@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { Request, Response } from "express";
 import { rateLimit } from "../../functions/src/security";
+import { checkRateLimit } from "../../api/_lib/security";
 
 function mockReqRes(ip = "192.0.2.1") {
   const req = {
@@ -88,5 +89,44 @@ describe("Rate Limiting", () => {
     const { req, res } = mockReqRes(ip);
     const ok = await rateLimit(req as any, res as any, "endpoint-B", limit);
     expect(ok).toBe(true);
+  });
+
+  describe("Serverless API Rate Limiter (checkRateLimit)", () => {
+    it("allows requests below limit and blocks requests exceeding limit", () => {
+      const ip = "203.0.113.42";
+      const endpoint = "test-api-endpoint";
+      const limit = 3;
+
+      for (let i = 0; i < limit; i++) {
+        const res = checkRateLimit(ip, endpoint, limit);
+        expect(res.allowed).toBe(true);
+        expect(res.retryAfter).toBe(0);
+      }
+
+      // Exceeded request
+      const blocked = checkRateLimit(ip, endpoint, limit);
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.retryAfter).toBeGreaterThan(0);
+      expect(blocked.retryAfter).toBeLessThanOrEqual(600);
+    });
+
+    it("partitions rate limits by endpoint and IP", () => {
+      const ipA = "203.0.113.100";
+      const ipB = "203.0.113.101";
+      const limit = 2;
+
+      checkRateLimit(ipA, "fetch", limit);
+      checkRateLimit(ipA, "fetch", limit);
+      const blockedA = checkRateLimit(ipA, "fetch", limit);
+      expect(blockedA.allowed).toBe(false);
+
+      // Different IP for same endpoint should be allowed
+      const resB = checkRateLimit(ipB, "fetch", limit);
+      expect(resB.allowed).toBe(true);
+
+      // Same IP for different endpoint should be allowed
+      const resDiffEndpoint = checkRateLimit(ipA, "popular", limit);
+      expect(resDiffEndpoint.allowed).toBe(true);
+    });
   });
 });
