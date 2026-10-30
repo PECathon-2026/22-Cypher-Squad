@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { checkRateLimit } from "../_lib/security.js";
+import { checkRateLimit, getTrustedClientIp } from "../_lib/security.js";
 import { getRecommendationsList } from "../_lib/store.js";
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
@@ -16,7 +16,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
 
-  const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || "unknown";
+  const ip = getTrustedClientIp(req);
   const rate = checkRateLimit(ip, "recommendations", 60);
   if (!rate.allowed) {
     res.statusCode = 429;
@@ -65,7 +65,10 @@ async function parseJsonBody(req: IncomingMessage): Promise<any> {
     let data = "";
     req.on("data", (chunk) => {
       data += chunk;
-      if (data.length > 1024 * 1024) reject(new Error("Body too large"));
+      if (data.length > 1024 * 1024) {
+        req.destroy();
+        reject(new Error("Body too large"));
+      }
     });
     req.on("end", () => {
       try {

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fetchSafely } from "./_lib/ssrf.js";
-import { checkRateLimit } from "./_lib/security.js";
+import { checkRateLimit, getTrustedClientIp } from "./_lib/security.js";
 
 export default async function handler(req: IncomingMessage & { body?: any; query?: any }, res: ServerResponse) {
   if (req.method === "OPTIONS") {
@@ -14,8 +14,11 @@ export default async function handler(req: IncomingMessage & { body?: any; query
 
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
+  res.setHeader("Referrer-Policy", "no-referrer");
 
-  const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || "unknown";
+  const ip = getTrustedClientIp(req);
   const rate = checkRateLimit(ip, "fetch", 120);
   if (!rate.allowed) {
     res.statusCode = 429;
@@ -85,6 +88,7 @@ async function parseJsonBody(req: IncomingMessage): Promise<any> {
     req.on("data", (chunk) => {
       data += chunk;
       if (data.length > 2 * 1024 * 1024) {
+        req.destroy();
         reject(new Error("Body too large"));
       }
     });

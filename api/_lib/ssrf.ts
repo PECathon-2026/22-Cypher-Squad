@@ -12,13 +12,28 @@ export async function fetchSafely(input: string): Promise<{ status: number; cont
     await assertPublicDestination(url);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    let upstream: Response;
     try {
-      upstream = await fetch(url, {
+      const upstream = await fetch(url, {
         redirect: "manual",
         signal: controller.signal,
-        headers: { "User-Agent": "SmallWebReader/0.1 (+feed reader)" },
+        headers: { "User-Agent": "Confluence/1.0 (+feed reader)" },
       });
+
+      if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+        const location = upstream.headers.get("location");
+        if (!location || redirect === MAX_REDIRECTS) {
+          throw new Error("Too many or invalid upstream redirects");
+        }
+        url = validateUrl(new URL(location, url).toString());
+        continue;
+      }
+
+      const body = await readLimitedBody(upstream);
+      return {
+        status: upstream.status,
+        contentType: upstream.headers.get("content-type") ?? "application/octet-stream",
+        body,
+      };
     } catch (err: unknown) {
       if (controller.signal.aborted) {
         throw new Error("Upstream request timed out");
@@ -27,22 +42,6 @@ export async function fetchSafely(input: string): Promise<{ status: number; cont
     } finally {
       clearTimeout(timeout);
     }
-
-    if ([301, 302, 303, 307, 308].includes(upstream.status)) {
-      const location = upstream.headers.get("location");
-      if (!location || redirect === MAX_REDIRECTS) {
-        throw new Error("Too many or invalid upstream redirects");
-      }
-      url = validateUrl(new URL(location, url).toString());
-      continue;
-    }
-
-    const body = await readLimitedBody(upstream);
-    return {
-      status: upstream.status,
-      contentType: upstream.headers.get("content-type") ?? "application/octet-stream",
-      body,
-    };
   }
 
   throw new Error("Too many upstream redirects");
@@ -64,7 +63,7 @@ export function validateUrl(input: string): string {
   if (url.port && !["80", "443"].includes(url.port)) {
     throw new Error("Non-standard ports are blocked");
   }
-  const secretPattern = /token|secret|key|auth|password|signature/i;
+  const secretPattern = /^(token|secret|api_?key|auth(?:_?token)?|password|signature|sig)$/i;
   for (const key of url.searchParams.keys()) {
     if (secretPattern.test(key)) {
       throw new Error("Secret-bearing query parameters are blocked");
@@ -75,7 +74,8 @@ export function validateUrl(input: string): string {
 }
 
 export async function assertPublicDestination(url: string): Promise<void> {
-  const hostname = new URL(url).hostname.toLowerCase();
+  const parsed = new URL(url);
+  const hostname = parsed.hostname.toLowerCase();
   if (
     hostname === "localhost" ||
     hostname.endsWith(".localhost") ||
@@ -86,8 +86,9 @@ export async function assertPublicDestination(url: string): Promise<void> {
     throw new Error("Private or local destinations are blocked");
   }
 
-  if (isIP(hostname)) {
-    if (isPrivateAddress(hostname)) {
+  const cleanHostname = hostname.replace(/^\[|\]$/g, "");
+  if (isIP(cleanHostname)) {
+    if (isPrivateAddress(cleanHostname)) {
       throw new Error("Private or local destinations are blocked");
     }
     return;
@@ -95,7 +96,7 @@ export async function assertPublicDestination(url: string): Promise<void> {
 
   let addresses: Array<{ address: string; family: number }>;
   try {
-    addresses = await lookup(hostname, { all: true, verbatim: true });
+    addresses = await lookup(cleanHostname, { all: true, verbatim: true });
   } catch {
     throw new Error("Unable to resolve upstream hostname");
   }
@@ -128,7 +129,7 @@ export function isPrivateAddress(address: string): boolean {
   }
 
   const normalized = address.toLowerCase();
-  if (normalized === "::" || normalized === "::1") return true;
+  if (normalized === "::" || normalized === "::1" || /^0*(:0*)*:1$/.test(normalized)) return true;
   if (normalized.startsWith("::ffff:")) {
     const ipv4Part = normalized.slice(7);
     if (isIP(ipv4Part) === 4) return isPrivateAddress(ipv4Part);
@@ -145,6 +146,9 @@ export function isPrivateAddress(address: string): boolean {
   }
   if (normalized.startsWith("ff")) return true;
   if (normalized.startsWith("2001:db8:")) return true;
+  if (normalized.startsWith("64:ff9b::")) return true;
+  if (normalized.startsWith("2002:")) return true;
+  if (/^2001:0{1,4}:/.test(normalized) || normalized.startsWith("2001::")) return true;
   return false;
 }
 

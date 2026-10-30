@@ -13,18 +13,27 @@ export type DiscoveryFeedItem = {
   seededPopularityCount?: number;
 };
 
+const SECRET_PATTERN = /^(token|secret|api_?key|auth(?:_?token)?|password|signature|sig)$/i;
+
 function safeUrls(feedUrls: string[]): string[] {
-  return [...new Set(feedUrls.filter((value) => {
-    try {
-      const url = new URL(value);
-      return ["http:", "https:"].includes(url.protocol) &&
-        !url.username && !url.password &&
-        (!url.port || ["80", "443"].includes(url.port)) &&
-        ![...url.searchParams.keys()].some((key) => /token|secret|key|auth|password|signature/i.test(key));
-    } catch {
-      return false;
-    }
-  }))];
+  return [
+    ...new Set(
+      feedUrls.filter((value) => {
+        try {
+          const url = new URL(value);
+          return (
+            ["http:", "https:"].includes(url.protocol) &&
+            !url.username &&
+            !url.password &&
+            (!url.port || ["80", "443"].includes(url.port)) &&
+            ![...url.searchParams.keys()].some((key) => SECRET_PATTERN.test(key))
+          );
+        } catch {
+          return false;
+        }
+      }),
+    ),
+  ];
 }
 
 async function request(path: string, init?: RequestInit): Promise<Response> {
@@ -53,21 +62,46 @@ export async function getRecommendations(feedUrls: string[], contextFeed?: strin
 
 export async function submitContribution(feedUrls: string[]): Promise<void> {
   const requestId = crypto.randomUUID().replaceAll("-", "");
-  const record: ContributionRecord = { requestId, feedUrls: safeUrls(feedUrls).slice(0, 20), createdAt: new Date().toISOString(), status: "queued" };
+  const record: ContributionRecord = {
+    requestId,
+    feedUrls: safeUrls(feedUrls).slice(0, 20),
+    createdAt: new Date().toISOString(),
+    status: "queued",
+  };
   if (!record.feedUrls.length) throw new Error("No eligible feed URLs were selected.");
   await readerDb.outbox.put(record);
   await flushContributionOutbox();
 }
 
+let isFlushing = false;
+
 export async function flushContributionOutbox(): Promise<void> {
-  const queued = await readerDb.outbox.where("status").equals("queued").sortBy("createdAt");
-  for (const item of queued) {
-    const response = await request("/api/discovery/submit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ requestId: item.requestId, feedUrls: item.feedUrls }),
-    });
-    if (!response.ok) throw new Error(await response.text());
-    await readerDb.outbox.update(item.requestId, { status: "sent" });
+  if (isFlushing) return;
+  isFlushing = true;
+  try {
+    const state = await readerDb.sharingState.get("discovery");
+    if (!state?.enabled) {
+      // If user opted out or not enabled, discard queued contributions
+      await readerDb.outbox.where("status").equals("queued").delete();
+      return;
+    }
+
+    const queued = await readerDb.outbox.where("status").equals("queued").sortBy("createdAt");
+    for (const item of queued) {
+      try {
+        const response = await request("/api/discovery/submit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId: item.requestId, feedUrls: item.feedUrls }),
+        });
+        if (response.ok) {
+          await readerDb.outbox.delete(item.requestId);
+        }
+      } catch {
+        // Network failure, leave in outbox for subsequent retry
+      }
+    }
+  } finally {
+    isFlushing = false;
   }
 }

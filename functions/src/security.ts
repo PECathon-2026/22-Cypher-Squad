@@ -3,6 +3,8 @@ import { getAppCheck } from "firebase-admin/app-check";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import type { Request, Response } from "express";
 import { createHmac } from "node:crypto";
+import { isIP } from "node:net";
+import { isPrivateAddress } from "./index.js";
 
 if (!getApps().length) initializeApp();
 const db = getFirestore();
@@ -118,8 +120,28 @@ export function normalizeSafeUrl(value: unknown): string {
     if (!["http:", "https:"].includes(url.protocol)) return "";
     if (url.username || url.password) return "";
     if (url.port && !["80", "443"].includes(url.port)) return "";
-    if ([...url.searchParams.keys()].some((key) => /token|secret|key|auth|password|signature/i.test(key))) {
+
+    const hostname = url.hostname.toLowerCase();
+    if (
+      hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname.endsWith(".local") ||
+      hostname.endsWith(".internal") ||
+      hostname === "metadata.google.internal"
+    ) {
       return "";
+    }
+
+    const cleanHostname = hostname.replace(/^\[|\]$/g, "");
+    if (isIP(cleanHostname) && isPrivateAddress(cleanHostname)) {
+      return "";
+    }
+
+    const secretPattern = /^(token|secret|api_?key|auth(?:_?token)?|password|signature|sig)$/i;
+    for (const key of url.searchParams.keys()) {
+      if (secretPattern.test(key)) {
+        return "";
+      }
     }
     url.hash = "";
     return url.toString();

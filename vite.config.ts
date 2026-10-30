@@ -13,8 +13,8 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg"],
       manifest: {
-        name: "Small Web Reader",
-        short_name: "Web Reader",
+        name: "Confluence",
+        short_name: "Confluence",
         theme_color: "#f5f1e8",
         background_color: "#f5f1e8",
         display: "standalone",

@@ -10,6 +10,7 @@ const parser = new XMLParser({
   cdataPropName: "#cdata",
   trimValues: true,
   removeNSPrefix: true,
+  htmlEntities: true,
 });
 
 export type FeedParseResult =
@@ -20,8 +21,10 @@ export type FeedParseResult =
 
 export function parseFeedXml(xml: string, url: string): FeedParseResult {
   const cleaned = xml.replace(/^\uFEFF/, "");
-  const rootMatch = cleaned.match(/<([A-Za-z][\w:.-]*)(?:\s[^>]*)?>/);
-  if (rootMatch && !new RegExp(`</(?:[\\w.-]+:)?${rootMatch[1].split(":").pop()}>\\s*$`, "i").test(cleaned) && !cleaned.includes("/>")) {
+  // Strip trailing or interior comments before root-tag matching so comments like <!-- Cache hit --> don't break validation
+  const stripped = cleaned.replace(/<!--[\s\S]*?-->/g, "").trim();
+  const rootMatch = stripped.match(/<([A-Za-z][\w:.-]*)(?:\s[^>]*)?>/);
+  if (rootMatch && !new RegExp(`</(?:[\\w.-]+:)?${rootMatch[1].split(":").pop()}>\\s*$`, "i").test(stripped) && !stripped.includes("/>")) {
     return { kind: "malformed-xml", error: "The XML document is incomplete." };
   }
   let document: XmlNode;
@@ -47,18 +50,20 @@ function buildRss(root: XmlNode, url: string): FeedParseResult {
     url,
     title: value(channel.title) || new URL(url).hostname,
     description: value(channel.description),
-    siteUrl: resolveRelative(value(channel.link), url),
+    siteUrl: resolveRelative(rssLinkValue(channel.link), url),
     format: "rss",
     entries: deduplicate(items.map((item, index) => {
-      const link = value(item.link) || value(item.guid);
+      const link = rssLinkValue(item.link) || value(item.guid);
       const contentHtml = value(item.encoded);
+      const titleStr = value(item.title) || "Untitled post";
+      const dateStr = parseDate(value(item.pubDate) || value(item.date));
       return {
-        id: value(item.guid) || link || `${url}#${index}`,
-        title: value(item.title) || "Untitled post",
+        id: generatePostId(url, value(item.guid), link, titleStr, dateStr, index),
+        title: titleStr,
         url: resolveRelative(link || url, url),
         summary: plainText(value(item.description) || contentHtml),
         contentHtml: contentHtml || undefined,
-        publishedAt: parseDate(value(item.pubDate) || value(item.date)),
+        publishedAt: dateStr,
         author: value(item.author) || value(item.creator) || undefined,
       };
     })),
@@ -77,13 +82,15 @@ function buildAtom(root: XmlNode, url: string): FeedParseResult {
     entries: deduplicate(entries.map((entry, index) => {
       const link = linkValue(entry.link) || value(entry.id);
       const contentHtml = value(entry.content);
+      const titleStr = value(entry.title) || "Untitled post";
+      const dateStr = parseDate(value(entry.published) || value(entry.updated));
       return {
-        id: value(entry.id) || link || `${url}#${index}`,
-        title: value(entry.title) || "Untitled post",
+        id: generatePostId(url, value(entry.id), link, titleStr, dateStr, index),
+        title: titleStr,
         url: resolveRelative(link || url, url),
         summary: plainText(value(entry.summary) || contentHtml),
         contentHtml: contentHtml || undefined,
-        publishedAt: parseDate(value(entry.published) || value(entry.updated)),
+        publishedAt: dateStr,
         author: value(asObject(entry.author)?.name) || undefined,
       };
     })),
@@ -104,6 +111,27 @@ function value(value: unknown): string {
   const object = asObject(value);
   return object ? String(object["#text"] ?? object["#cdata"] ?? "").trim() : "";
 }
+
+function rssLinkValue(val: unknown): string {
+  if (Array.isArray(val)) {
+    for (const item of val) {
+      if (typeof item === "string" && item.trim()) return item.trim();
+      const obj = asObject(item);
+      if (obj) {
+        if (obj["@_rel"] === "self") continue;
+        const candidate = String(obj["@_href"] ?? obj["#text"] ?? obj["#cdata"] ?? "").trim();
+        if (candidate) return candidate;
+      }
+    }
+    for (const item of val) {
+      const v = value(item);
+      if (v) return v;
+    }
+    return "";
+  }
+  return value(val);
+}
+
 function linkValue(value: unknown): string {
   const links = Array.isArray(value) ? value : [value];
   const alternate = links.map(asObject).find((link) => !link || !link["@_rel"] || link["@_rel"] === "alternate");
@@ -113,7 +141,16 @@ function valueOfLink(value: XmlNode | undefined): string {
   return value ? String(value["@_href"] ?? value["#text"] ?? "").trim() : "";
 }
 function resolveRelative(valueToResolve: string, base: string): string {
-  try { return new URL(valueToResolve || base, base).toString(); } catch { return base; }
+  try {
+    const resolved = new URL(valueToResolve || base, base).toString();
+    const parsed = new URL(resolved);
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return base;
+    }
+    return resolved;
+  } catch {
+    return base;
+  }
 }
 function parseDate(valueToParse: string): string {
   const parsed = valueToParse ? Date.parse(valueToParse) : Number.NaN;
@@ -130,4 +167,16 @@ function deduplicate(entries: FeedEntry[]): FeedEntry[] {
     seen.add(key);
     return true;
   });
+}
+
+function generatePostId(feedUrl: string, guid: string, link: string, title: string, publishedAt: string, index: number): string {
+  if (guid) return guid;
+  if (link) return link;
+  const raw = `${feedUrl}::${title}::${publishedAt}`;
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) {
+    hash = (hash << 5) - hash + raw.charCodeAt(i);
+    hash |= 0;
+  }
+  return `${feedUrl}#post-${Math.abs(hash)}-${index}`;
 }

@@ -55,7 +55,6 @@ class ReaderDatabase extends Dexie {
       sharingState: "id",
     });
   }
-
 }
 
 export const readerDb = new ReaderDatabase();
@@ -80,7 +79,11 @@ export async function trimPostCache() {
   for (const feed of feeds) {
     const posts = await readerDb.posts.where("feedUrl").equals(feed.url).sortBy("publishedAt");
     const excess = posts.slice(0, Math.max(0, posts.length - 100));
-    if (excess.length) await readerDb.posts.bulkDelete(excess.map((post) => post.postId));
+    if (excess.length) {
+      const ids = excess.map((post) => post.postId);
+      await readerDb.posts.bulkDelete(ids);
+      await readerDb.articles.bulkDelete(ids);
+    }
   }
 }
 
