@@ -3,8 +3,9 @@ import { seedFeeds } from "../../functions/src/seed-data";
 import { normalizeSafeUrl } from "../../functions/src/security";
 
 describe("Discovery Logic & Seed Fallback", () => {
-  it("seeded fallback dataset provides 12 valid seed feeds", () => {
-    expect(seedFeeds).toHaveLength(12);
+  it("seeded fallback dataset provides 10-15 valid seed feeds per PS-003 spec", () => {
+    expect(seedFeeds.length).toBeGreaterThanOrEqual(10);
+    expect(seedFeeds.length).toBeLessThanOrEqual(15);
     for (const feed of seedFeeds) {
       expect(feed.name).toBeTruthy();
       expect(feed.normalizedUrl).toBeTruthy();
@@ -32,7 +33,7 @@ describe("Discovery Logic & Seed Fallback", () => {
     }));
 
     const filtered = candidates.filter((c) => !followedSet.has(c.url));
-    expect(filtered).toHaveLength(10);
+    expect(filtered).toHaveLength(candidates.length - followedUrls.length);
     expect(filtered.some((c) => followedSet.has(c.url))).toBe(false);
   });
 
@@ -78,5 +79,18 @@ describe("Discovery Logic & Seed Fallback", () => {
     expect(scored[0].reason).toBe("co-sub");
     expect(scored[1].url).toBe("https://c.com/feed");
     expect(scored[1].score).toBe(10);
+  });
+
+  it("getFallbackSeedFeeds returns structured fallback items excluding followed feeds", async () => {
+    const { getFallbackSeedFeeds } = await import("../lib/discovery");
+    const followed = new Set(["https://feeds.bbci.co.uk/news/rss.xml"]);
+    const fallback = getFallbackSeedFeeds(followed);
+
+    expect(fallback.length).toBeGreaterThan(0);
+    expect(fallback.some((item) => item.url === "https://feeds.bbci.co.uk/news/rss.xml")).toBe(false);
+    expect(fallback[0]).toHaveProperty("score", 1);
+    expect(fallback[0]).toHaveProperty("seededSignals", 1);
+    expect(fallback[0]).toHaveProperty("reason");
+    expect(fallback[0].name).toBeTruthy();
   });
 });

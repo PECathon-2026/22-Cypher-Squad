@@ -158,11 +158,12 @@ function isPrivate(address: string) {
 }
 
 function classifyBody(body: string, contentType: string, status: number, url: string) {
-  if (status === 401 || status === 403 || /captcha|cloudflare|verify you are human|login required/i.test(body)) {
-    return { classification: "auth_or_access_challenge", detail: "Access challenge or authentication response." };
+  if (status === 401 || status === 403) {
+    return { classification: "auth_or_access_challenge", detail: `Access challenge or authentication response (HTTP ${status}).` };
   }
   if (status === 429 || status >= 500) return { classification: "temporarily_unavailable", detail: `Transient HTTP status ${status}.` };
   if (status >= 400) return { classification: "http_error", detail: `HTTP status ${status}.` };
+
   const parsed = parseFeedXml(body, url);
   if (parsed.kind === "valid" || parsed.kind === "valid-empty") {
     return {
@@ -174,6 +175,14 @@ function classifyBody(body: string, contentType: string, status: number, url: st
       sampleIds: parsed.feed.entries.slice(0, 5).map((entry) => entry.id || entry.url),
     };
   }
+
+  if (
+    /cf-challenge|challenge-running|cf-browser-verification|just a moment\.\.\.|verify you are human/i.test(body) ||
+    (/text\/html/i.test(contentType) && /captcha|cloudflare Ray ID/i.test(body))
+  ) {
+    return { classification: "auth_or_access_challenge", detail: "Cloudflare or bot challenge page encountered." };
+  }
+
   if (/^\s*<(?:!doctype\s+html|html\b)/i.test(body) || /text\/html/i.test(contentType)) {
     return { classification: "not_a_feed_html", detail: "Response is HTML rather than a usable RSS or Atom feed." };
   }

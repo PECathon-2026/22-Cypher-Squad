@@ -37,13 +37,20 @@ export default async function handler(req: IncomingMessage & { body?: any; query
 
   // Parse body if POST
   let rawUrl = "";
+  let ifNoneMatch = (req.headers["if-none-match"] as string) || undefined;
+  let ifModifiedSince = (req.headers["if-modified-since"] as string) || undefined;
+
   if (req.method === "GET") {
     const urlObj = new URL(req.url || "/", "http://localhost");
     rawUrl = urlObj.searchParams.get("url") || "";
+    if (!ifNoneMatch) ifNoneMatch = urlObj.searchParams.get("etag") || undefined;
+    if (!ifModifiedSince) ifModifiedSince = urlObj.searchParams.get("lastModified") || undefined;
   } else {
     try {
       const body = await parseJsonBody(req);
       rawUrl = typeof body?.url === "string" ? body.url : "";
+      if (body?.etag && !ifNoneMatch) ifNoneMatch = String(body.etag);
+      if (body?.lastModified && !ifModifiedSince) ifModifiedSince = String(body.lastModified);
     } catch {
       res.statusCode = 400;
       res.end("Invalid JSON payload");
@@ -58,9 +65,16 @@ export default async function handler(req: IncomingMessage & { body?: any; query
   }
 
   try {
-    const result = await fetchSafely(rawUrl);
+    const result = await fetchSafely(rawUrl, { ifNoneMatch, ifModifiedSince });
     res.statusCode = result.status;
     res.setHeader("Content-Type", result.contentType);
+    if (result.etag) {
+      res.setHeader("ETag", result.etag);
+    }
+    if (result.lastModified) {
+      res.setHeader("Last-Modified", result.lastModified);
+    }
+    res.setHeader("X-Robots-Tag", "noindex");
     res.end(result.body);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upstream fetch failed";

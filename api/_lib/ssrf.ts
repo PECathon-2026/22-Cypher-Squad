@@ -5,8 +5,35 @@ const MAX_BODY_BYTES = 2 * 1024 * 1024; // 2 MiB limit
 const MAX_REDIRECTS = 3;
 const REQUEST_TIMEOUT_MS = 8_000; // 8-second timeout
 
-export async function fetchSafely(input: string): Promise<{ status: number; contentType: string; body: string }> {
+export type FetchSafelyOptions = {
+  ifNoneMatch?: string;
+  ifModifiedSince?: string;
+};
+
+export type FetchSafelyResult = {
+  status: number;
+  contentType: string;
+  body: string;
+  etag?: string;
+  lastModified?: string;
+  robotsAllowed?: boolean;
+};
+
+export async function fetchSafely(
+  input: string,
+  options?: FetchSafelyOptions,
+): Promise<FetchSafelyResult> {
   let url = validateUrl(input);
+
+  const requestHeaders: Record<string, string> = {
+    "User-Agent": "Confluence/1.0 (+feed reader; respectful bot)",
+  };
+  if (options?.ifNoneMatch) {
+    requestHeaders["If-None-Match"] = options.ifNoneMatch;
+  }
+  if (options?.ifModifiedSince) {
+    requestHeaders["If-Modified-Since"] = options.ifModifiedSince;
+  }
 
   for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect += 1) {
     await assertPublicDestination(url);
@@ -16,7 +43,7 @@ export async function fetchSafely(input: string): Promise<{ status: number; cont
       const upstream = await fetch(url, {
         redirect: "manual",
         signal: controller.signal,
-        headers: { "User-Agent": "Confluence/1.0 (+feed reader)" },
+        headers: requestHeaders,
       });
 
       if ([301, 302, 303, 307, 308].includes(upstream.status)) {
@@ -28,11 +55,28 @@ export async function fetchSafely(input: string): Promise<{ status: number; cont
         continue;
       }
 
+      const etag = upstream.headers.get("etag") || undefined;
+      const lastModified = upstream.headers.get("last-modified") || undefined;
+
+      if (upstream.status === 304) {
+        return {
+          status: 304,
+          contentType: upstream.headers.get("content-type") ?? "text/plain",
+          body: "",
+          etag,
+          lastModified,
+          robotsAllowed: true,
+        };
+      }
+
       const body = await readLimitedBody(upstream);
       return {
         status: upstream.status,
         contentType: upstream.headers.get("content-type") ?? "application/octet-stream",
         body,
+        etag,
+        lastModified,
+        robotsAllowed: true,
       };
     } catch (err: unknown) {
       if (controller.signal.aborted) {

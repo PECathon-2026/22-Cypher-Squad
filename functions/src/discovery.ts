@@ -16,10 +16,16 @@ export const popularFeeds = onRequest({ cors: true }, async (request, response) 
   }
 
   // Popular feeds endpoint does not accept a user subscription list and does not increment counters
-  const snapshot = await db.collection("feeds").orderBy("livePopularityCount", "desc").limit(30).get();
-  const feeds = snapshot.empty
-    ? seedFeeds.map((feed) => ({ ...feed, seededPopularityCount: 1, livePopularityCount: 0 }))
-    : snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  let feeds: any[] = [];
+  try {
+    const snapshot = await db.collection("feeds").orderBy("livePopularityCount", "desc").limit(30).get();
+    feeds = snapshot.empty
+      ? seedFeeds.map((feed) => ({ ...feed, seededPopularityCount: 1, livePopularityCount: 0 }))
+      : snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (err) {
+    console.warn("Firestore error in popularFeeds, using seed fallback:", (err as Error).message);
+    feeds = seedFeeds.map((feed) => ({ ...feed, seededPopularityCount: 1, livePopularityCount: 0 }));
+  }
 
   response.json({ feeds });
 });
@@ -45,33 +51,46 @@ export const recommendations = onRequest({ cors: true }, async (request, respons
   const followed = new Set(urls);
 
   // 1. Fetch candidate feeds from the feeds collection (or fallback to seedFeeds)
-  const candidateSnapshot = await db.collection("feeds").orderBy("livePopularityCount", "desc").limit(100).get();
-  const candidateFeeds: Array<{
+  let candidateFeeds: Array<{
     url: string;
     name?: string;
     description?: string;
     seededPopularityCount?: number;
     livePopularityCount?: number;
-  }> = candidateSnapshot.empty
-    ? seedFeeds.map((feed) => ({
-        url: feed.normalizedUrl,
-        name: feed.name,
-        description: feed.description,
-        seededPopularityCount: 1,
-        livePopularityCount: 0,
-      }))
-    : candidateSnapshot.docs
-        .map((doc) => {
-          const data = doc.data();
-          return {
-            url: normalizeSafeUrl(data.normalizedUrl),
-            name: typeof data.name === "string" ? data.name : undefined,
-            description: typeof data.description === "string" ? data.description : undefined,
-            seededPopularityCount: Number(data.seededPopularityCount ?? 0),
-            livePopularityCount: Number(data.livePopularityCount ?? 0),
-          };
-        })
-        .filter((f) => Boolean(f.url));
+  }> = [];
+
+  try {
+    const candidateSnapshot = await db.collection("feeds").orderBy("livePopularityCount", "desc").limit(100).get();
+    candidateFeeds = candidateSnapshot.empty
+      ? seedFeeds.map((feed) => ({
+          url: feed.normalizedUrl,
+          name: feed.name,
+          description: feed.description,
+          seededPopularityCount: 1,
+          livePopularityCount: 0,
+        }))
+      : candidateSnapshot.docs
+          .map((doc) => {
+            const data = doc.data();
+            return {
+              url: normalizeSafeUrl(data.normalizedUrl),
+              name: typeof data.name === "string" ? data.name : undefined,
+              description: typeof data.description === "string" ? data.description : undefined,
+              seededPopularityCount: Number(data.seededPopularityCount ?? 0),
+              livePopularityCount: Number(data.livePopularityCount ?? 0),
+            };
+          })
+          .filter((f) => Boolean(f.url));
+  } catch (err) {
+    console.warn("Firestore error in recommendations candidates, using seed fallback:", (err as Error).message);
+    candidateFeeds = seedFeeds.map((feed) => ({
+      url: feed.normalizedUrl,
+      name: feed.name,
+      description: feed.description,
+      seededPopularityCount: 1,
+      livePopularityCount: 0,
+    }));
+  }
 
   // 2. Query co-subscription pairs from feedPairs for followed feeds
   const coScores = new Map<string, number>();
@@ -79,36 +98,49 @@ export const recommendations = onRequest({ cors: true }, async (request, respons
     const chunkSize = 30;
     for (let i = 0; i < urls.length; i += chunkSize) {
       const chunk = urls.slice(i, i + chunkSize);
-      const [snapA, snapB] = await Promise.all([
-        db.collection("feedPairs").where("feedA", "in", chunk).get(),
-        db.collection("feedPairs").where("feedB", "in", chunk).get(),
-      ]);
+      try {
+        const [snapA, snapB] = await Promise.all([
+          db.collection("feedPairs").where("feedA", "in", chunk).get(),
+          db.collection("feedPairs").where("feedB", "in", chunk).get(),
+        ]);
 
-      const processPair = (data: FirebaseFirestore.DocumentData) => {
-        const liveCount = Number(data.liveCoSubscriptionCount ?? 0);
-        const seededCount = Number(data.seededCoSubscriptionCount ?? 0);
-        const weight = liveCount + seededCount;
-        if (weight <= 0) return;
+        const processPair = (data: FirebaseFirestore.DocumentData) => {
+          const liveCount = Number(data.liveCoSubscriptionCount ?? 0);
+          const seededCount = Number(data.seededCoSubscriptionCount ?? 0);
+          const weight = liveCount + seededCount;
+          if (weight <= 0) return;
 
-        const a = normalizeSafeUrl(data.feedA);
-        const b = normalizeSafeUrl(data.feedB);
-        if (followed.has(a) && !followed.has(b) && b) {
-          coScores.set(b, (coScores.get(b) ?? 0) + weight);
-        }
-        if (followed.has(b) && !followed.has(a) && a) {
-          coScores.set(a, (coScores.get(a) ?? 0) + weight);
-        }
-      };
+          const a = normalizeSafeUrl(data.feedA);
+          const b = normalizeSafeUrl(data.feedB);
+          if (followed.has(a) && !followed.has(b) && b) {
+            coScores.set(b, (coScores.get(b) ?? 0) + weight);
+          }
+          if (followed.has(b) && !followed.has(a) && a) {
+            coScores.set(a, (coScores.get(a) ?? 0) + weight);
+          }
+        };
 
-      snapA.docs.forEach((doc) => processPair(doc.data()));
-      snapB.docs.forEach((doc) => processPair(doc.data()));
+        snapA.docs.forEach((doc) => processPair(doc.data()));
+        snapB.docs.forEach((doc) => processPair(doc.data()));
+      } catch (err) {
+        console.warn("Firestore error in feedPairs query:", (err as Error).message);
+      }
     }
   }
 
   // 3. Compute combined ranking score: coScore * 3 + popularity
   const feedMap = new Map<
     string,
-    { url: string; name?: string; description?: string; score: number; reason: string }
+    {
+      url: string;
+      name?: string;
+      description?: string;
+      score: number;
+      reason: string;
+      commonFollowers: number;
+      liveSignals: number;
+      seededSignals: number;
+    }
   >();
 
   for (const candidate of candidateFeeds) {
@@ -118,7 +150,7 @@ export const recommendations = onRequest({ cors: true }, async (request, respons
     const score = co * 3 + popularity;
     const reason =
       co > 0
-        ? "Frequently read alongside your subscriptions"
+        ? `Frequently read alongside your subscriptions (${co} common readers)`
         : "Aggregate popularity signal";
     feedMap.set(candidate.url, {
       url: candidate.url,
@@ -126,6 +158,9 @@ export const recommendations = onRequest({ cors: true }, async (request, respons
       description: candidate.description,
       score,
       reason,
+      commonFollowers: co,
+      liveSignals: candidate.livePopularityCount ?? 0,
+      seededSignals: candidate.seededPopularityCount ?? 0,
     });
   }
 
@@ -135,7 +170,10 @@ export const recommendations = onRequest({ cors: true }, async (request, respons
       feedMap.set(coUrl, {
         url: coUrl,
         score: co * 3,
-        reason: "Frequently read alongside your subscriptions",
+        reason: `Frequently read alongside your subscriptions (${co} common readers)`,
+        commonFollowers: co,
+        liveSignals: 0,
+        seededSignals: 1,
       });
     }
   }

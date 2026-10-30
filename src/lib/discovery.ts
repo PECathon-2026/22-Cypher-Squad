@@ -1,17 +1,39 @@
 import { appCheckHeaders } from "./app-check";
 import { readerDb, type ContributionRecord } from "./db";
+import { seedFeeds } from "../data/seeds";
 
 export type DiscoveryFeedItem = {
   url: string;
   name?: string;
   description?: string;
+  category?: string;
   score?: number;
   reason?: string;
+  commonFollowers?: number;
+  overlapFeeds?: string[];
   liveSignals?: number;
   seededSignals?: number;
+  popularity?: number;
   livePopularityCount?: number;
   seededPopularityCount?: number;
 };
+
+export function getFallbackSeedFeeds(followedUrls: Set<string>): DiscoveryFeedItem[] {
+  return seedFeeds
+    .filter((feed) => !followedUrls.has(feed.url))
+    .map((feed) => ({
+      url: feed.url,
+      name: feed.name,
+      description: feed.description,
+      category: feed.category,
+      score: 1,
+      reason: "Curated independent blog recommended for discovery",
+      seededSignals: 1,
+      liveSignals: 0,
+      seededPopularityCount: 1,
+      livePopularityCount: 0,
+    }));
+}
 
 const SECRET_PATTERN = /^(token|secret|api_?key|auth(?:_?token)?|password|signature|sig)$/i;
 

@@ -33,7 +33,7 @@ import {
 import { cacheArticle, extractArticle, getCachedArticle } from "./lib/article";
 import { resolveFeedUrl } from "./lib/feed";
 import { clearReaderCache, readerDb, seedDatabase, setDiscoveryEnabled, trimPostCache, type LocalPost } from "./lib/db";
-import { flushContributionOutbox, getPopularFeeds, getRecommendations, submitContribution, type DiscoveryFeedItem } from "./lib/discovery";
+import { flushContributionOutbox, getFallbackSeedFeeds, getPopularFeeds, getRecommendations, submitContribution, type DiscoveryFeedItem } from "./lib/discovery";
 import { refreshFeed } from "./lib/refresh";
 
 type Post = {
@@ -1046,6 +1046,7 @@ function DiscoverPage({
   const [loading, setLoading] = useState(false);
   const [showContribution, setShowContribution] = useState(false);
   const [contributionState, setContributionState] = useState("");
+  const [discoveryNotice, setDiscoveryNotice] = useState("");
   const followedUrls = new Set(feeds.map((feed) => feed.url));
 
   useEffect(() => {
@@ -1063,16 +1064,44 @@ function DiscoverPage({
   }, [showContribution]);
 
   const loadDiscovery = async () => {
-    if (offline) return;
     setLoading(true);
+    setDiscoveryNotice("");
     try {
+      if (offline) {
+        const fallback = getFallbackSeedFeeds(followedUrls);
+        if (personalized) {
+          setLiveRecommendations(fallback);
+        } else {
+          setLivePopular(fallback);
+        }
+        setDiscoveryNotice("Offline mode active — showing curated reading recommendations.");
+        return;
+      }
+
       if (personalized) {
-        setLiveRecommendations(await getRecommendations(feeds.map((feed) => feed.url)));
+        const results = await getRecommendations(feeds.map((feed) => feed.url));
+        if (results && results.length > 0) {
+          setLiveRecommendations(results);
+        } else {
+          setLiveRecommendations(getFallbackSeedFeeds(followedUrls));
+        }
       } else {
-        setLivePopular(await getPopularFeeds());
+        const results = await getPopularFeeds();
+        if (results && results.length > 0) {
+          setLivePopular(results);
+        } else {
+          setLivePopular(getFallbackSeedFeeds(followedUrls));
+        }
       }
     } catch {
-      setContributionState("Discovery is temporarily unavailable.");
+      // Backend temporarily unavailable: gracefully fall back to seed feeds
+      const fallback = getFallbackSeedFeeds(followedUrls);
+      if (personalized) {
+        setLiveRecommendations(fallback);
+      } else {
+        setLivePopular(fallback);
+      }
+      setDiscoveryNotice("Discovery service is temporarily unreachable — showing curated recommendations.");
     } finally {
       setLoading(false);
     }
@@ -1134,7 +1163,19 @@ function DiscoverPage({
           </button>
         </div>
 
+        {discoveryNotice && (
+          <div className="inline-message mb-4" role="status">
+            <Info size={16} />
+            <span>{discoveryNotice}</span>
+          </div>
+        )}
+
         <div className="recommendation-grid">
+          {displayedFeeds.length === 0 && !loading && (
+            <div className="empty-state py-8 text-center text-muted text-sm col-span-full">
+              No new feeds to recommend right now. You are already following all suggested blogs!
+            </div>
+          )}
           {displayedFeeds.map((item, index) => {
             const swatch = ["sage", "ochre", "clay"][index % 3];
             return (
